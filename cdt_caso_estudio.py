@@ -11,173 +11,182 @@ Original file is located at
 # 01240372038 - Diego Ardila Quintero
 
 # Librerías
+# Caso de estudio: Proyección de certificado de depósito a término (CDT)
 import gradio as gr
 import pandas as pd
-import csv
-import os
-# ----------
-"""
-Requisitos:
-DatosCDT => Monto inicial + Plazo
-Validación => Monto inicial > 0 y Plazo > 1 || Si dato inválido, informar sobre el error y solicitar el dato nuevamente
-# Formula para Tasa Mensual (%) => 0,001695 * Plazo * 0,0983
-# Cada mes:
-- Interés = Saldo Anterior * (Tasa/100)
-- Saldo nuevo = Saldo Anterior + Interés
 
-# Tabla de resultados, contener
-Mes | Intereses | Saldo final del mes
-inicia en mes 0
+COLS_REG = ["Registro", "Plazo", "Monto inicial"]
+COLS_CDT = ["Mes", "Intereses", "Monto final"]
 
-# Resultado final
-Saldo que recibirá al finalizar el plazo, la tasa aplicada, total de intereses ganados
-"""
-# ----------
-
-def listToDict(usersList):
-  result = []
-  for i in usersList:
-    if i == "" or not isinstance(i, list):
-      continue
-    result.append({
-        'Usuario':i[0],
-        'Identificacion':i[1],
-        'Nombre':i[2],
-        'Masa':i[3],
-        'Estatura':i[4],
-        'IMC-Calculado':i[5],
-        'Masa-Max':i[6]
-    })
-  return pd.DataFrame(result)
+# ---------- Datos: dos listas paralelas ----------
+# registros[i]      -> [num_registro, plazo, monto_inicial]
+# proyecciones[i]   -> [(mes, interes, saldo), ...]  (la proyección del registro i)
+registros = []
+proyecciones = []
 
 
-def newUser(initialAmount,time):
-  global numUser
-  numUser += 1
-  actualUser = [] # Vacia la lista
-
-  tasaMensual = 0.001695 * time + 0.0983
-  saldoBefore = initialAmount
-  _i = 0
-  while _i < time:
-    _i += 1
-    interes = saldoBefore * (tasaMensual/100)
-    saldoNew = saldoBefore + interes
-    saldoBefore = saldoNew
+# ---------- Lógica ----------
+def tasa_mensual(plazo):
+    return 0.001695 * plazo + 0.0983
 
 
-  #                 0
-  actualUser = []
-  listUsers.append(actualUser)
+def validar_datos(monto, plazo):
+    if monto is None or monto <= 0:
+        raise gr.Error("El monto inicial debe ser mayor que 0.")
+    if plazo is None or plazo <= 1 or int(plazo) != plazo:
+        raise gr.Error("El plazo debe ser un número entero de meses mayor que 1.")
 
-  return listToDict(listUsers)
 
-# Interfaz
+def validar_indice(n):
+    if n is None or not (1 <= n <= len(registros)):
+        raise gr.Error(f"Ingrese un número de registro válido (1 a {len(registros)}).")
+
+
+def calcular_proyeccion(monto, plazo):
+    tasa = tasa_mensual(plazo)
+    saldo = monto
+    filas = [(0, 0, round(monto, 2))]  # mes 0
+    for mes in range(1, int(plazo) + 1):
+        interes = saldo * (tasa / 100)
+        saldo += interes
+        filas.append((mes, round(interes, 2), round(saldo, 2)))
+    return filas
+
+
+# ---------- Helpers para mostrar ----------
+def df_registros():
+    return pd.DataFrame(registros, columns=COLS_REG)
+
+
+def df_proyeccion(n):
+    if n and 1 <= n <= len(registros):
+        return pd.DataFrame(proyecciones[int(n) - 1], columns=COLS_CDT)
+    return pd.DataFrame(columns=COLS_CDT)
+
+
+def resumen(n):
+    if not (n and 1 <= n <= len(registros)):
+        return ""
+    _, plazo, monto = registros[int(n) - 1]
+    saldo_final = proyecciones[int(n) - 1][-1][2]
+    return (f"**Registro {int(n)}** — Saldo final: ${saldo_final:,.2f} | "
+            f"Tasa mensual aplicada: {tasa_mensual(plazo):.4f}% | "
+            f"Total de intereses: ${saldo_final - monto:,.2f}")
+
+
+def refrescar(n):
+    """Devuelve: tabla registros, tabla CDT, resumen, # del próximo registro, registro mostrado"""
+    return df_registros(), df_proyeccion(n), resumen(n), len(registros) + 1, n
+
+
+# ---------- Operaciones ----------
+def agregar(monto, plazo):
+    validar_datos(monto, plazo)
+    registros.append([len(registros) + 1, int(plazo), monto])
+    proyecciones.append(calcular_proyeccion(monto, plazo))
+    return refrescar(len(registros))
+
+
+def editar(indice, monto, plazo):
+    validar_indice(indice)
+    validar_datos(monto, plazo)
+    i = int(indice) - 1
+    registros[i] = [int(indice), int(plazo), monto]
+    proyecciones[i] = calcular_proyeccion(monto, plazo)
+    return refrescar(int(indice))
+
+
+def eliminar(indice):
+    validar_indice(indice)
+    i = int(indice) - 1
+    del registros[i]
+    del proyecciones[i]
+    for pos, reg in enumerate(registros):  # renumerar
+        reg[0] = pos + 1
+    return refrescar(min(int(indice), len(registros)))
+
+
+def mostrar(n):
+    validar_indice(n)
+    return df_proyeccion(n), resumen(n)
+
+
+def guardar_csv():
+    if not registros:
+        raise gr.Error("No hay registros para guardar.")
+    # Archivo 1: registros
+    df_registros().to_csv("registros_cdt.csv", index=False, encoding="utf-8")
+    # Archivo 2: todas las proyecciones, enlazadas por la columna "Registro"
+    filas = [(i + 1, *fila) for i, proy in enumerate(proyecciones) for fila in proy]
+    pd.DataFrame(filas, columns=["Registro"] + COLS_CDT).to_csv(
+        "proyecciones_cdt.csv", index=False, encoding="utf-8")
+    return ["registros_cdt.csv", "proyecciones_cdt.csv"]
+
+
+# ---------- Interfaz ----------
 with gr.Blocks() as interfaz:
+    gr.Markdown("# Registro de CDT")
+    gr.Markdown("Ingrese los datos para calcular el CDT")
 
-  gr.Markdown("# Registro de usuarios")
-  gr.Markdown("Ingrese los datos del usuario")
+    with gr.Row():
+        with gr.Column():
+            numUsuario = gr.Number(label="# de registro", interactive=False, value=1)
+            initialMoney = gr.Number(label="Cantidad de dinero inicial (ej: 1000000)", minimum=1)
+            timeToUse = gr.Number(label="Plazo en meses (ej: 12)", minimum=2, precision=0)
 
-  with gr.Row():
-    with gr.Column():
-      identificacion = gr.Number(
-          placeholder=12345678,
-          label="Identificación (C.C)",
-          precision=0,  # Cuando no se requieren decimales
-          minimum=0
-      )
+        with gr.Column():
+            gr.Markdown("### Operaciones")
+            btnAdd = gr.Button("Agregar registro")
+            btnEdit = gr.Button("Editar registro")
+            btnDelete = gr.Button("Eliminar registro")
+            btnSave = gr.Button("Guardar CSV")
+            gr.Markdown("Para editar o eliminar, indique el número de registro según la tabla.")
+            indexUserInput = gr.Number(label="Número de registro", precision=0, minimum=1)
 
-      nombre = gr.Textbox(
-          label="Nombre",
-          placeholder="Juanito Perez",
-          max_length=30
-      )
+        with gr.Column():
+            archivoSalida = gr.File(label="Archivos CSV", file_count="multiple")
 
-      masa = gr.Number(
-          label="Masa (Kg)",
-          placeholder=80,
-          minimum=0
-      )
+    tablaRegistro = gr.Dataframe(headers=COLS_REG, label="Registros")
 
-      estatura = gr.Number(
-          label="Estatura (Metros)",
-          placeholder=1.72,
-          minimum=0
-      )
+    with gr.Row():
+        choice = gr.Number(label="Registro que desea mostrar", precision=0, minimum=1)
+        btnShow = gr.Button("Mostrar proyección")
+    textoResumen = gr.Markdown()
+    tablaCDT = gr.Dataframe(headers=COLS_CDT, label="Proyección del CDT")
 
-    with gr.Column():
-      gr.Markdown("### Operaciones")
-
-      btnAdd= gr.Button("Agregar usuario")
-      btnEdit = gr.Button("Editar usuario")
-      btnDelete = gr.Button("Eliminar usuario")
-      btnSave = gr.Button("Guardar CSV")
-
-      rangeMaxUsers= len(listUsers)
-      if rangeMaxUsers == 0:
-        msg = "Aún no hay datos disponibles"
-      else:
-        msg = "1 - ",rangeMaxUsers
-
-      gr.Markdown(f"Ingrese un valor si va a eliminar o editar. De lo contrario déjelo vacío. Recuerde el número máximo de usuario según la tabla de resultados")
-      indexUserInput = gr.Number(
-          label="Número de usuario",
-          precision=0,
-          minimum=1,
-          maximum=rangeMaxUsers
-      )
-
-    with gr.Column():
-      archivoSalida = gr.File(
-          label="Archivo CSV"
-      )
-
-  tabla = gr.Dataframe(
-  headers=[
-      "Usuario",
-      "Identificación",
-      "Nombre",
-      "Masa",
-      "Estatura",
-      "IMC",
-      "Masa Máxima"
-  ],
-  label="Usuarios registrados"
-)
-
-# Funciones de los botones
-  btnAdd.click(
-      fn=newUser,
-      inputs=[identificacion,nombre,masa,estatura],
-      outputs=tabla
-     )
-
-  btnEdit.click(
-      fn=editUser,
-      inputs=[indexUserInput,identificacion,nombre,masa,estatura],
-      outputs=tabla
-      )
-
-  btnDelete.click(
-      fn=deleteUser,
-      inputs=[indexUserInput],
-      outputs=tabla
-      )
-
-  btnSave.click(
-      fn=saveCSV
-  )
+    salidas = [tablaRegistro, tablaCDT, textoResumen, numUsuario, choice]
+    btnAdd.click(agregar, [initialMoney, timeToUse], salidas)
+    btnEdit.click(editar, [indexUserInput, initialMoney, timeToUse], salidas)
+    btnDelete.click(eliminar, [indexUserInput], salidas)
+    btnShow.click(mostrar, [choice], [tablaCDT, textoResumen])
+    btnSave.click(guardar_csv, outputs=archivoSalida)
 
 interfaz.launch(debug=True)
 
-numUser = 0
-listUsers = []
+numUser += 1
+actualCDT = [] # Vacia la lista
+listCDTs = []
+
+initialAmount = int(input("tonto1: "))
+time = int(input("tonto2: "))
+
 
 tasaMensual = 0.001695 * time + 0.0983
 saldoBefore = initialAmount
 _i = 0
+initialCDT = (_i,0,initialAmount)
+actualCDT.append(initialCDT)
+
 while _i < time:
   _i += 1
   interes = saldoBefore * (tasaMensual/100)
   saldoNew = saldoBefore + interes
   saldoBefore = saldoNew
+
+  progressCDT = (_i,round(interes,2),round(saldoNew,2))
+  actualCDT.append(progressCDT)
+
+listCDTs.append(actualCDT)
+
+print(actualCDT)
+print(listCDTs)
