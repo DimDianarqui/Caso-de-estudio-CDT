@@ -162,31 +162,3 @@ with gr.Blocks() as interfaz:
     btnSave.click(guardar_csv, outputs=archivoSalida)
 
 interfaz.launch(debug=True)
-
-numUser += 1
-actualCDT = [] # Vacia la lista
-listCDTs = []
-
-initialAmount = int(input("tonto1: "))
-time = int(input("tonto2: "))
-
-
-tasaMensual = 0.001695 * time + 0.0983
-saldoBefore = initialAmount
-_i = 0
-initialCDT = (_i,0,initialAmount)
-actualCDT.append(initialCDT)
-
-while _i < time:
-  _i += 1
-  interes = saldoBefore * (tasaMensual/100)
-  saldoNew = saldoBefore + interes
-  saldoBefore = saldoNew
-
-  progressCDT = (_i,round(interes,2),round(saldoNew,2))
-  actualCDT.append(progressCDT)
-
-listCDTs.append(actualCDT)
-
-print(actualCDT)
-print(listCDTs)
